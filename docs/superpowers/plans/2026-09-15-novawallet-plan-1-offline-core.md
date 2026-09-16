@@ -32,7 +32,7 @@
 - **Isar:** use `isar_community` (`import 'package:isar_community/isar.dart';`). Generated code comes from `dart run build_runner build --delete-conflicting-outputs`. Collection accessors are pluralised with a trailing `s` (e.g. `outboxItemEntitys`).
 - **Do NOT copy Kiba's `main.dart` `MediaQuery(textScaler: TextScaler.linear(0.95))` override.** It ignores the system font scale, which the brief forbids.
 - Constants (copied from spec): biometric threshold ₦50,000.00 (`5000000` kobo); Tier 1 single-send cap ₦100,000.00 (`10000000`); Tier 2 cap ₦1,000,000.00 (`100000000`); minimum send ₦100.00 (`10000`); fee bands ≤ ₦5,000.00 → `1075`, ≤ ₦50,000.00 → `2688`, else `5375`; demo opening balance ₦250,000.00 (`25000000`); send outcome wait 8 s; backoff `min(2^attempts, 60)` seconds; trouble threshold 8 attempts.
-- Demo account: phone `08012345678`, password `NovaPay#2026`, PIN `1234`, Tier 2. Fake OTP `123456`.
+- Demo account: phone `08012345678`, password `NovaPay#2026`, PIN `1234`, Tier 2. Fake OTP `419372`. **Login is by email + password** (Firebase); the login screen collects an email, not a phone number.
 - Offline copy that must appear verbatim in Plan 2: **"Pending — will send when back online"**.
 - Host tests that touch Isar call `await Isar.initializeIsarCore(download: true);` in `setUpAll`. The first run downloads the native lib into the project root, and it is git-ignored.
 - **Firestore offline persistence is switched off** (`Settings(persistenceEnabled: false)`) and every read uses `Source.server`. Firestore caches and queues writes by default, which would put a second cache and a second durable queue underneath Isar. Every Firebase call is wrapped in a timeout so an offline write becomes a `NetworkFailure` our sync engine retries with the same key (Amendment A.0).
@@ -262,7 +262,7 @@ abstract class AppConstants {
   static const String demoPhone = '08012345678';
   static const String demoPassword = 'NovaPay#2026';
   static const String demoPin = '1234';
-  static const String fakeOtp = '123456';
+  static const String fakeOtp = '419372'; // matches the design's demo banner
   static const String clientDbName = 'nova_client';
   static const String serverDbName = 'nova_fake_server';
 
@@ -9242,7 +9242,9 @@ Expected: no analyzer issues; every test passes.
   firebase_core: ^4.1.1
   firebase_auth: ^6.1.0
   firebase_database: ^12.0.1
-  firebase_messaging: ^16.0.1   # optional, Task 16 delta
+  # firebase_messaging: ^16.0.1  # OMIT for the deadline: the graded sync
+  #                                notification is local. Add only if time
+  #                                remains after Plan 3., Task 16 delta
 ```
 
 - [ ] Create the Firebase project and platform config (CLI is already installed):
@@ -10123,7 +10125,9 @@ Firebase adds roughly **3–5 hours** (project setup, rules, service, re-testing
   firebase_core: ^4.1.1
   firebase_auth: ^6.1.0
   cloud_firestore: ^6.1.2
-  firebase_messaging: ^16.0.1   # optional
+  # firebase_messaging: ^16.0.1  # OMIT for the deadline: the graded sync
+  #                                notification is local. Add only if time
+  #                                remains after Plan 3.
 ```
 Resolved and verified on 2026-09-16 (firebase_core 4.15.0, firebase_auth 6.7.0, cloud_firestore 6.10.0). In the Firebase console enable **Authentication → Email/Password** and **Firestore Database** (production mode; the rules below replace the defaults).
 
@@ -10251,11 +10255,17 @@ service cloud.firestore {
           && request.resource.data.amountKobo is int
           && request.resource.data.amountKobo >= 0
           && request.resource.data.ref == ref;
-        allow delete: if false;
+        // Owner delete exists only so "Reset demo data" can wipe history.
+        allow delete: if isOwner(uid);
       }
 
+      // read/delete must not reference request.resource: it is undefined for
+      // those operations, and an undefined reference makes the whole condition
+      // error out — which Firestore treats as deny. The original combined
+      // `allow read, write` rule would have denied every getGoals() call.
       match /goals/{goalId} {
-        allow read, write: if isOwner(uid)
+        allow read, delete: if isOwner(uid);
+        allow create, update: if isOwner(uid)
           && request.resource.data.savedKobo is int
           && request.resource.data.savedKobo >= 0;
       }
@@ -10270,8 +10280,11 @@ service cloud.firestore {
       allow write: if false;
     }
 
+    // Public read: the reachability probe also runs on the login screen,
+    // before any auth exists. Requiring auth here would make a logged-out
+    // user look permanently offline. The doc holds nothing but { ok: true }.
     match /meta/{doc} {
-      allow read: if request.auth != null;
+      allow read: if true;
       allow write: if false;
     }
   }
@@ -10294,7 +10307,7 @@ The `processed` block is the slide: **"exactly-once isn't a promise my client ma
 ```
 `firestore.indexes.json` starts as `{ "indexes": [], "fieldOverrides": [] }` — the only ordered query (`transactions` by `createdAt`) uses a single-field index, which Firestore creates automatically.
 
-- [ ] **Step 3: Seed the directory and health doc** — `tool/seed_directory.dart`, a small Dart script run with `dart run tool/seed_directory.dart` against the emulator or the live project, writing `meta/health = {ok: true}` and one `directory/{bankCode}_{accountNumber}` document per demo account (the four beneficiaries from `DemoSeed.beneficiaries` plus a dozen names from `DemoSeed._directoryNames`, which the script imports so the two backends resolve the same names).
+- [ ] **Step 3: Seed the directory and health doc** — `tool/seed_directory.dart`, a small Dart script run with `dart run tool/seed_directory.dart` against the emulator or the live project, writing `meta/health = {ok: true}` and one `directory/{bankCode}_{accountNumber}` document per demo account (the four beneficiaries from `DemoSeed.beneficiaries` plus a dozen names from `DemoSeed._directoryNames`, which the script imports so the two backends resolve the same names). **The rules block client writes to `directory/` and `meta/`**, so the script cannot use the plain client SDK against the live project: authenticate with the Admin SDK (`dart_firebase_admin` + a service-account JSON — it bypasses rules, and works against the emulator via `FIRESTORE_EMULATOR_HOST`), or hand-create the ~17 documents once in the Firebase console. Do not weaken the rules to make the script work.
 
 - [ ] **Step 4: Deploy** — `firebase deploy --only firestore:rules --project novapay-takehome`
 
@@ -10423,9 +10436,12 @@ class FirebaseNovaService implements NovaApiService, BackendAdmin {
         return const BusinessFailure(BusinessCode.unauthorized, 'Your session has expired.');
       case 'unavailable':
       case 'deadline-exceeded':
-      case 'aborted': // transaction contention: safe to retry with the same key
         reachability?.reportUnreachable();
-        return NetworkFailure(message: e.message ?? 'Network error.', timedOut: e.code != 'aborted');
+        return NetworkFailure(message: e.message ?? 'Network error.', timedOut: true);
+      case 'aborted':
+        // Transaction contention, not an outage: retry with the same key,
+        // but do NOT flip the offline banner via reportUnreachable().
+        return const NetworkFailure(message: 'Please try again.');
       default:
         return NetworkFailure(message: e.message ?? 'Network error.');
     }
@@ -10535,9 +10551,6 @@ class FirebaseNovaService implements NovaApiService, BackendAdmin {
         if (phone == null) {
           return left(const BusinessFailure(BusinessCode.invalidCredentials, 'Enter a valid Nigerian phone number.'));
         }
-        final credential = await auth.createUserWithEmailAndPassword(
-            email: request.email.trim(), password: request.password);
-        final uid = credential.user!.uid;
         final profile = ProfileDto(
           fullName: request.fullName.trim(),
           phone: phone,
@@ -10546,6 +10559,26 @@ class FirebaseNovaService implements NovaApiService, BackendAdmin {
           bvnVerified: false,
           accountNumber: phone.substring(1),
         );
+        late final String uid;
+        try {
+          final credential = await auth.createUserWithEmailAndPassword(
+              email: request.email.trim(), password: request.password);
+          uid = credential.user!.uid;
+        } on FirebaseAuthException catch (e) {
+          // A crash between account creation and the seed batch leaves an auth
+          // user with no profile — a dead end ("email already in use" on
+          // register, "no profile" on login). Registering again with the same
+          // credentials completes the seed instead.
+          if (e.code != 'email-already-in-use') rethrow;
+          final credential = await auth.signInWithEmailAndPassword(
+              email: request.email.trim(), password: request.password);
+          uid = credential.user!.uid;
+          final existing = await paths.user(uid).get(_serverSource);
+          if (existing.exists) {
+            return left(const BusinessFailure(
+                BusinessCode.accountExists, 'An account with this email already exists.'));
+          }
+        }
         await _seedNewUser(uid, profile);
         return right(SessionDto(token: uid, profile: profile));
       });
@@ -10893,8 +10926,9 @@ class FirebaseNovaService implements NovaApiService, BackendAdmin {
     await batch.commit();
   }
 
-  /// Developer panel → "Reset demo data": wipes this user's subcollections
-  /// (processed keys included) and seeds them again.
+  /// Developer panel → "Reset demo data": wipes history, goals and
+  /// beneficiaries, then seeds them again. `processed` is left alone (the
+  /// rules forbid deleting it, and stale keys are harmless).
   @override
   Future<void> resetDemo() async {
     final user = auth.currentUser;
@@ -10903,11 +10937,13 @@ class FirebaseNovaService implements NovaApiService, BackendAdmin {
     final data = snap.data();
     if (data == null) return;
 
+    // `processed` is create-once by rule and deliberately NOT wiped: the rules
+    // forbid deleting it (that is the whole guarantee), and stale idempotency
+    // records are harmless because every new intent gets a fresh uuid key.
     for (final collection in [
       paths.transactions(user.uid),
       paths.goals(user.uid),
       paths.beneficiaries(user.uid),
-      paths.user(user.uid).collection('processed'),
     ]) {
       final docs = await collection.get(_serverSource);
       final batch = firestore.batch();
@@ -10956,5 +10992,5 @@ class FirebaseNovaService implements NovaApiService, BackendAdmin {
   FirebaseFirestore.instance.settings = const Settings(persistenceEnabled: false);
 ```
 Same four ported cases, plus one Firestore-specific case worth having: **a second `create` of the same `processed/{key}` document is rejected by the rules**, proving the guarantee is enforced server-side even if a buggy client tried.
-- **A.8 (docs):** the README's Backends section describes the Firestore shape and the create-once rule. The `AI_USAGE.md` entry gains one sentence: *"We moved from Realtime Database to Firestore because a Firestore transaction spans multiple documents, which let the idempotency record become a create-once document enforced by security rules rather than a field inside a hand-managed node."*
+- **A.8 (docs):** the README's Backends section describes the Firestore shape and the create-once rule. It must also state the trust boundary honestly, before the panel asks: the rules make a *replayed* intent impossible (create-once `processed/{key}`) and shape-check money (`is int`, `>= 0`), but they cannot verify arithmetic — a client holding the user's own credentials could set its own balance. Production moves the mutation behind a trusted backend (Cloud Functions / a real core-banking API); here the client-side transaction is the deliberate, documented boundary of a take-home. Phrase the deck's "server-enforced" slide as *duplication is impossible*, not *tampering is impossible*. The `AI_USAGE.md` entry gains one sentence: *"We moved from Realtime Database to Firestore because a Firestore transaction spans multiple documents, which let the idempotency record become a create-once document enforced by security rules rather than a field inside a hand-managed node."*
 - **A.9 (time):** unchanged. Firestore costs the same 3–5 hours and removes the single-node contortion, so if anything it is slightly quicker.

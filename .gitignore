@@ -43,3 +43,14 @@ app.*.map.json
 /android/app/debug
 /android/app/profile
 /android/app/release
+
+# Isar native core downloaded by host unit tests
+libisar.dylib
+libisar.so
+isar.dll
+
+# Firebase CLI cache. The platform config files (google-services.json,
+# GoogleService-Info.plist, lib/firebase_options.dart) ARE committed: they
+# identify the project, they are not secrets, and a clone must build with one
+# command. Access is controlled by firestore.rules, not by hiding these.
+.firebase/

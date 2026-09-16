@@ -5,6 +5,7 @@
 - **Deadline:** submission 2:00 PM, Thursday 17 September 2026. A 10-minute live presentation with a PowerPoint deck saved under the candidate's name.
 - **Target toolchain:** Flutter 3.44.1 (stable), Dart 3.12
 - **Reference architecture:** Kiba (`~/Documents/mobile/kiba`)
+- **Backend amendment (2026-09-16):** Firebase Auth (email + password) + Cloud Firestore is the real backend; `FakeNovaServer` remains as the `--dart-define=BACKEND=fake` fallback and unit-test double. Firestore persistence stays **OFF** — the Isar outbox is the only durable queue. Where this spec and the plan's Amendments A/B disagree, the amendments win.
 
 ---
 
@@ -26,7 +27,7 @@ This is a Flutter app for two NovaPay journeys: **sending money from NovaWallet*
 - Added product scope: **animated splash**, **onboarding PageView**, **create account (signup)**, **fake login**, **unlock for returning users**.
 
 ### Non-goals (documented as trade-offs)
-- Golden tests. Dark mode. Background sync while the app is killed (`workmanager`). Daily or cumulative KYC limits. Withdrawing from a goal. Real "Add money" funding. A real HTTP backend or Dio client. Server-side verification of biometric signatures. USSD channel.
+- Cancelling a queued action (the design's Pending screen no longer promises it; a later version could delete a `queued` item in one transaction, never a `sending` one). Golden tests. Dark mode. Background sync while the app is killed (`workmanager`). Daily or cumulative KYC limits. Withdrawing from a goal. Real "Add money" funding. A custom HTTP/Dio backend (the real backend is Firebase — see the amendment note above). Server-side verification of biometric signatures. USSD channel.
 
 ---
 
@@ -41,6 +42,7 @@ This is a Flutter app for two NovaPay journeys: **sending money from NovaWallet*
 | A5 | **Transfer fees are fictional NIP-style bands in kobo:** ≤ ₦5,000.00 → ₦10.75; ₦5,000.01–₦50,000.00 → ₦26.88; > ₦50,000.00 → ₦53.75. Contributions to your own NovaSave goal are free. |
 | A6 | **KYC tiers (single-transaction cap only):** Tier 1 (no BVN) is ₦100,000.00 per send. Tier 2 (BVN verified) is ₦1,000,000.00 per send. |
 | A7 | **Biometric threshold:** sends **≥ ₦50,000.00** require biometric confirmation, falling back to PIN when biometrics are unavailable (e.g. the iOS Simulator). Sends below it require the transaction PIN. Every send and contribution is authorised. |
+| A8a | **Login uses email + password** (Firebase Authentication). The login screen collects an email; the phone number is profile data captured at signup. |
 | A8 | **Login and signup need connectivity.** A returning user with a stored session can **unlock offline** with PIN or biometrics. |
 | A9 | **A new account is credited with a demo balance** of ₦250,000.00 and seeded with about 60 historical transactions and 4 saved beneficiaries, so list performance and offline sends can be shown at once. A seeded demo account also exists (see §6.4). |
 | A10 | **Dates in Yoruba** fall back to English formatting where `intl` has no `yo` date symbols. Money is always `₦` with en-NG digit grouping. |
@@ -62,7 +64,8 @@ Screen (StatefulWidget = Controller, implements <X>ControllerContract)
    Repository (interface I<X>Repository → <X>RepositoryImpl), returns Either<Failure, T>
         │
         ├─ Local data source: Isar (client DB), SharedPreferences, SecureStorage
-        └─ Remote data source: NovaApiService → FakeNovaServer (in-process)
+        └─ Remote data source: NovaApiService → FirebaseNovaService (Auth + Firestore)
+                                             | FakeNovaServer (fallback / test double)
 ```
 
 - **Controllers and views never touch a repository**, `NovaApiService` or Isar.
@@ -124,7 +127,7 @@ Each feature follows Kiba: `cubit/`, `repository/`, `presentation/{contracts,con
 |---|---|---|---|
 | `AuthCubit` | singleton | `IAuthRepository` | Session: `unknown → onboarding → unauthenticated → locked → authenticated`. Sign-out wipes client data. |
 | `SignupCubit` | factory | `IAuthRepository` | Phone → OTP → details → BVN → PIN |
-| `LoginCubit` | factory | `IAuthRepository`, `AuthCubit` | Phone + password, biometric login |
+| `LoginCubit` | factory | `IAuthRepository`, `AuthCubit` | Email + password (Firebase). No biometric here — biometrics can only unlock an existing session (see `UnlockCubit`) |
 | `UnlockCubit` | factory | `IAuthRepository`, `BiometricGate`, `AuthCubit` | Offline-capable PIN or biometric unlock |
 | `LocaleCubit` | singleton | `ISettingsRepository` | en / yo, persisted |
 | `ConnectivityCubit` | singleton | `NetworkInfo`, `FakeServerControls` | `online` / `offline`, debounced 1 s |
@@ -219,7 +222,7 @@ queued ──claim (txn)──► sending ──success────────�
 
 On `sending → succeeded` or `→ failed`, if `queuedWhileOffline` is true or the app is backgrounded, `LocalNotificationService` shows, for example, "₦5,000.00 sent to Ada Obi" or "Transfer to Ada Obi failed: insufficient funds". Tapping opens the transaction details. The Android 13+ notification permission is requested the first time an item is queued offline.
 
-### 5.6 The fake server (`FakeNovaServer implements NovaApiService`)
+### 5.6 The fake server (`FakeNovaServer implements NovaApiService`) — fallback backend and unit-test double
 
 - Every call first checks `FakeServerControls.simulateOffline` or the absence of real connectivity, and throws `NetworkFailure` without touching state.
 - Latency is 400–1200 ms by default, adjustable in the developer panel.
@@ -251,7 +254,7 @@ Splash ─► onboardingSeen? no ─► Onboarding ─► Create account ─► 
 | Your details | Full name, email, password (≥ 8 chars, strength hints), terms and privacy consent checkbox (NDPA) |
 | BVN (optional) | 11 digits, fake verification → Tier 2. Skip → Tier 1, with an explanation of limits. |
 | Create PIN | 4 digits, entered twice; the hash goes to secure storage |
-| Login | Phone + password; "Use biometrics" if enabled; "Create account" link. Needs connectivity. |
+| Login | Email + password; "Create account" link. Needs connectivity. No biometric button — with no stored session there is nothing for biometrics to unlock (a returning user lands on Unlock instead; design review A2). |
 | Unlock | Greeting with first name, PIN pad, biometric button, "Not you? Sign out". Works offline. |
 
 ### 6.2 Main shell (bottom navigation: Home · NovaSave · Profile)
@@ -300,7 +303,7 @@ abstract class BiometricGate {
 
 ### 6.4 Demo seed
 
-- **Seeded account:** phone `08012345678`, password `NovaPay#2026`, PIN `1234`, Tier 2, ₦250,000.00, 60 transactions, 4 beneficiaries, 1 goal ("Rent — December", target ₦600,000.00, 35% saved).
+- **Seeded account:** phone `08012345678`, email `tolu.adeyemi@mail.com`, password `NovaPay#2026`, PIN `1234`, demo OTP `419372`, Tier 2, ₦250,000.00, 60 transactions, 4 beneficiaries, 1 goal ("Rent — December", target ₦600,000.00, 35% saved).
 - "Reset demo data" in the developer panel restores this.
 
 ---
@@ -313,7 +316,7 @@ abstract class BiometricGate {
   - Accepts up to 2 decimal places; `"1,500.5"` becomes `150050`. Rejects more than 2 decimals, negatives and non-digits.
   - Caps at ₦1,000,000,000.00 to prevent overflow.
   - Splits on `.` and computes with `int.parse`.
-- **Progress:** `bps = min(10000, savedKobo * 10000 ~/ targetKobo)`, displayed as `Bps.format` (Kiba). The bar fraction for the widget is `bps / 10000`, conversion at the paint edge only.
+- **Progress:** `bps = savedKobo * 10000 ~/ targetKobo` — **uncapped in text**, so an over-saved goal honestly reads `104%` with a "Goal reached" pill (design decision, 2026-09-16). Only the **bar width** is capped: `min(10000, bps) / 10000`, converted to a double at the paint edge only.
 - **Known AI trap to document:** Kiba's `WithdrawAmountController` uses `double.tryParse` and `toStringAsFixed`, the naive pattern the brief warns about.
 
 ---

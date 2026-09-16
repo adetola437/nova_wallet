@@ -1,0 +1,127 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    function isOwner(uid) {
+      return request.auth != null && request.auth.uid == uid;
+    }
+
+    function userDoc(uid) {
+      return /databases/$(database)/documents/users/$(uid);
+    }
+
+    function receiptDoc(uid, ref) {
+      return /databases/$(database)/documents/users/$(uid)/transactions/$(ref);
+    }
+
+    // NovaWallet transfer, seen from the RECIPIENT's documents. Another user may
+    // add to your balance only when, in the same transaction, their own
+    // receipt names you as the recipient for exactly that amount, and their own
+    // balance drops by that amount plus their fee. No free money, no
+    // crediting someone without paying.
+    function isPaidBySender(uid, ref, amount) {
+      let senderReceipt = getAfter(receiptDoc(request.auth.uid, ref)).data;
+      return request.auth != null
+        && request.auth.uid != uid
+        && senderReceipt.recipientUid == uid
+        && senderReceipt.direction == 'debit'
+        && senderReceipt.amountKobo == amount
+        && getAfter(userDoc(request.auth.uid)).data.balanceKobo
+             == get(userDoc(request.auth.uid)).data.balanceKobo - amount - senderReceipt.feeKobo;
+    }
+
+    match /users/{uid} {
+      allow read, create: if isOwner(uid);
+      // The balance may change, but never to a non-integer or a negative number.
+      allow update: if (isOwner(uid)
+          && request.resource.data.balanceKobo is int
+          && request.resource.data.balanceKobo >= 0)
+        // A NovaWallet credit from another user: only the balance (up) and
+        // the ref of the credit may change, and that credit must be paid for.
+        || (request.auth != null && request.auth.uid != uid
+          && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['balanceKobo', 'lastCreditRef'])
+          && request.resource.data.balanceKobo is int
+          && isPaidBySender(uid, request.resource.data.lastCreditRef,
+               request.resource.data.balanceKobo - resource.data.balanceKobo));
+      allow delete: if false;
+
+      // The exactly-once guarantee, enforced by the server: an idempotency
+      // record can be created once and can never be changed or removed.
+      // (It prevents DUPLICATION. It does not prevent tampering: a client with
+      // the user's credentials could still write its own balance. Production
+      // moves the mutation behind a trusted backend.)
+      match /processed/{key} {
+        allow read, create: if isOwner(uid);
+        allow update, delete: if false;
+      }
+
+      match /transactions/{ref} {
+        allow read: if isOwner(uid);
+        allow create, update: if isOwner(uid)
+          && request.resource.data.amountKobo is int
+          && request.resource.data.amountKobo >= 0
+          && request.resource.data.ref == ref;
+        // The recipient's copy of a NovaWallet transfer, written by the sender:
+        // create-only, a credit, from the caller, and paid for (see above).
+        allow create: if request.auth != null && request.auth.uid != uid
+          && request.resource.data.ref == ref
+          && request.resource.data.direction == 'credit'
+          && request.resource.data.fromUid == request.auth.uid
+          && request.resource.data.amountKobo is int
+          && request.resource.data.amountKobo > 0
+          && getAfter(userDoc(uid)).data.lastCreditRef == ref
+          && isPaidBySender(uid, ref, request.resource.data.amountKobo);
+        // Owner delete exists only so "Reset demo data" can wipe history.
+        allow delete: if isOwner(uid);
+      }
+
+      // read/delete must not reference request.resource: it is undefined for
+      // those operations, and an undefined reference makes the whole condition
+      // error out — which Firestore treats as deny.
+      match /goals/{goalId} {
+        allow read, delete: if isOwner(uid);
+        allow create, update: if isOwner(uid)
+          && request.resource.data.savedKobo is int
+          && request.resource.data.savedKobo >= 0;
+      }
+
+      match /beneficiaries/{beneficiaryId} {
+        allow read, write: if isOwner(uid);
+      }
+    }
+
+    // Exact-email lookup for NovaWallet transfers. Any signed-in user may fetch
+    // one email's entry; nobody may list the directory. You can only publish
+    // your own verified sign-in email.
+    match /directoryEmails/{email} {
+      allow get: if request.auth != null;
+      allow list, delete: if false;
+      allow create, update: if request.auth != null
+        && request.auth.token.email != null
+        && email == request.auth.token.email.lower()
+        && request.resource.data.uid == request.auth.uid
+        && request.resource.data.accountNumber == get(userDoc(request.auth.uid)).data.accountNumber;
+    }
+
+    // Account number -> uid, read inside a transfer. First claim wins: once an
+    // account number points at a user, nobody else can take it over.
+    match /directoryAccounts/{accountNumber} {
+      allow get: if request.auth != null;
+      allow list, delete: if false;
+      allow create: if request.auth != null
+        && request.resource.data.uid == request.auth.uid
+        && get(userDoc(request.auth.uid)).data.accountNumber == accountNumber;
+      allow update: if request.auth != null
+        && resource.data.uid == request.auth.uid
+        && request.resource.data.uid == request.auth.uid;
+    }
+
+    // Public read: the reachability probe also runs on the login screen,
+    // before any auth exists. The document holds nothing but { ok: true }
+    // (and a missing document is still a successful server round-trip).
+    match /meta/{doc} {
+      allow read: if true;
+      allow write: if false;
+    }
+  }
+}

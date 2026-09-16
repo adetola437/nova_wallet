@@ -2,8 +2,12 @@
 
 Everything decided so far, newest first. Start here in a fresh session.
 
+> **New session? Read [HANDOFF.md](HANDOFF.md) first** — current status, the user's working rules, and exactly where to resume (Plan 2, Task 21).
+
 | Document | What it holds |
 |---|---|
+| [HANDOFF.md](HANDOFF.md) | Status as of 2026-09-16 evening and the next steps |
+| [superpowers/plans/2026-09-16-novawallet-plan-2-ui.md](superpowers/plans/2026-09-16-novawallet-plan-2-ui.md) | **Plan 2** — UI, l10n, widget tests (Tasks 19–28; 19–20 done) |
 | [design/design-review-2026-09-16.md](design/design-review-2026-09-16.md) | Review of the Claude Design artboards: 4 conflicts with the build, 4 numeric errors, Yorùbá inconsistencies, copy fixes, **and the extracted design tokens** (colours, type, spacing, radii) ready for the theme files |
 | [superpowers/plans/2026-09-15-novawallet-plan-1-offline-core.md](superpowers/plans/2026-09-15-novawallet-plan-1-offline-core.md) | **Plan 1** — foundation + offline core, 18 TDD tasks with full code. Read **Amendment A** (Firebase) and **Amendment B** (Firestore supersedes Amendment A's Realtime Database sections) at the end of the file before starting |
 | [superpowers/specs/2026-09-15-novawallet-send-save-design.md](superpowers/specs/2026-09-15-novawallet-send-save-design.md) | Approved design spec: assumptions, architecture, data model, the exactly-once rules, screens, testing, deliverables |

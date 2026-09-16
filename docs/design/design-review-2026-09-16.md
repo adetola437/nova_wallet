@@ -4,6 +4,8 @@ Source: Claude Design project `20b5097c-fa82-4bb1-84f8-3cef42aa55ba`, file `Nova
 
 Boards: **1** design system + Wallet Home states (7) · **2** Send Money flow (14) · **3** Entry experience (12) · **4** NovaSave, Profile, Yorùbá & 200%-text variants (12).
 
+> **Status — applied 2026-09-16.** Every fix below is now live in the Claude Design project (file re-uploaded and re-rendered; the language-bottom-sheet work done in the design chat is intact). Three items were resolved in the code instead of the artboards: the 104% cap (spec now allows >100% in text, caps only the bar), the demo OTP (`AppConstants.fakeOtp` now matches the design's `419372`), and the cancel promise (removed from the design copy; cancelling a queued action stays a documented non-goal).
+
 Verdict: **strong work, build on it.** The money maths is right nearly everywhere, the offline story is told properly, and the accessibility groundwork (status pairs with contrast ratios, 48dp targets, the "gold is never text on white" rule) is better than most production fintech kits. The issues below are worth fixing before or during implementation — four of them conflict with the architecture we agreed.
 
 ---
